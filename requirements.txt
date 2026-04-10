@@ -17,6 +17,6 @@ sqlalchemy>=2.0.0
 
 # Environment Management
 python-dotenv>=1.0.0
+pandas 
+python-multipart
 
-# Optional: For Streamlit UI (if needed)
-# streamlit>=1.31.0

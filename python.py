@@ -1,14 +1,13 @@
 from langchain_core.prompts import PromptTemplate
 from typing_extensions import TypedDict
-from typing import Annotated,List,Any,Literal
+from typing import Literal,Optional
 from langgraph.graph import StateGraph,START,END
 from datetime import datetime, timedelta
 from pydantic import BaseModel, Field
 import os
-import streamlit as st
 from langchain_groq import ChatGroq
 from dotenv import load_dotenv
-from langchain.output_parsers import PydanticOutputParser
+from langchain_core.output_parsers import PydanticOutputParser
 from sqlalchemy import create_engine, text
 import os
 import sqlalchemy
@@ -23,23 +22,27 @@ class HoloState(TypedDict):
 
 
 class VisualizationConfig(BaseModel):
-    chart_type: Literal["bar_chart_3d", "globe_3d", "scatter_3d", "pie_3d"] = Field(
+    chart_type: Literal["bar_chart_3d", "globe_3d", "scatter_3d", "pie_3d","bubble_3d","heatmap_3d", "funnel_3d",] = Field(
         ..., 
         description="The type of 3D visualization to render."
     )
-    x_axis: str = Field(
-        ..., 
-        description="The column name to use for the X-axis (e.g., 'quarter', 'region')."
+    x_axis: Optional[str] = Field(
+        default=None,
+        description="The column name to use for the X-axis"
     )
-    y_axis: str = Field(
-        ..., 
-        description="The column name to use for the height/value (e.g., 'revenue', 'users')."
+
+    y_axis: Optional[str] = Field(
+        default=None,
+        description="The column name to use for the value"
     )
-    color_theme:str = Field(
+
+
+
+    color_theme:Optional[str] = Field(
         "neon_blue", 
         description="The aesthetic theme for the 3D scene."
     )
-    camera_action:str= Field(
+    camera_action:Optional[str]= Field(
         "zoom_in", 
         description="The initial camera movement animation when data loads."
     )
@@ -61,6 +64,9 @@ class HoloGraphResponse(BaseModel):
         ..., 
         description="A short, spoken-style summary of the data findings for the TTS engine."
     )
+
+
+
 
 def get_db_schema():
     # 1. Setup Path
@@ -106,138 +112,58 @@ def get_db_schema():
 
 def get_config(state: HoloState):
     query = state['user_query']
-    
     db_context = get_db_schema()
-    template_text = """### SYSTEM ROLE
-You are an expert **SQLite** Text-to-SQL Agent.
 
-### DATABASE SCHEMA (ABSOLUTE TRUTH)
-{{ db_schema }}
+    template_text = """You are a SQLite Text-to-SQL agent that returns ONLY valid JSON.
 
-### CRITICAL SQLITE RULES (DO NOT BREAK)
-1. **NO `EXTRACT()` Function:** SQLite does NOT support `EXTRACT(YEAR FROM ...)`.
-   - **Use this instead:** `strftime('%Y', date_column)` OR simply use the `year` column if available.
-2. **Table Names:** You MUST use the EXACT table names from the schema above.
-   - **BANNED:** `sales_data`, `software_sales`
-   - **CORRECT:** `sales`
-3. **Column Names:** Never invent columns like `sale_date` or `total_sales`. Use `transaction_date` and `sales_amount`.
-4. ALWAYS alias aggregate columns:
-   - SUM(sales_amount) AS sales_amount
-   - COUNT(*) AS count
-   - AVG(price) AS avg_price
+### DATABASE SCHEMA
+{db_schema}
 
-### Visualization Rules (STRICT AND NON-NEGOTIABLE)
+### SQLITE RULES
+- Use strftime('%Y', column) instead of EXTRACT()
+- Use exact table/column names from schema
+- Always alias aggregates: SUM(x) AS x, COUNT(*) AS count
+- Always GROUP BY when using aggregates
+- Use LOWER() for text filters
 
-1. chart_type MUST be exactly one of:
-   - "bar_chart_3d"
-   - "pie_3d"
-   - "scatter_3d"
-   - "globe_3d"
+### CHART SELECTION
+Pick chart_type based on the user's query:
+- "pie_3d"      → words like: distribution, proportion, breakdown, share, percentage
+- "scatter_3d"  → words like: correlation, vs, versus, relationship
+- "globe_3d"    → words like: map, globe, world, geographic, country
+- "bubble_3d"   → bubble, 3 metrics, size comparison       
+- "heatmap_3d"  → heatmap, intensity, density, pattern      
+- "funnel_3d"   → funnel, pipeline, conversion, stages 
+- "bar_chart_3d"→ everything else (default)
 
-2. NEVER invent chart types such as:
-   - "pie_chart", "bar", "line", "area", etc.
-
-3. PIE CHART RULES (VERY IMPORTANT):
-   - You may ONLY use "pie_3d" if ALL conditions are met:
-     a) Exactly ONE metric
-     b) Exactly ONE categorical dimension
-     c) NO temporal dimension (year, quarter, month, date)
-   - If ANY temporal dimension exists → pie_3d is FORBIDDEN.
-
-4. BAR CHART RULES:
-   - Use "bar_chart_3d" for:
-     a) Comparisons across categories
-     b) Comparisons across time
-     c) Grouped or multi-dimensional comparisons
-   - If unsure, ALWAYS choose "bar_chart_3d".
-
-5. SCATTER CHART RULES:
-   - Use "scatter_3d" ONLY when the user asks for distribution, correlation, or spread.
-
-6. GLOBE CHART RULES:
-   - Use "globe_3d" ONLY when the user explicitly asks for geographic or world-based visualization.
-
-7. DEFAULT BEHAVIOR:
-   - If multiple chart types seem possible, ALWAYS default to "bar_chart_3d".
-
-
-### DYNAMIC EXECUTION PROTOCOL
-1. **Step 1: Semantic Mapping:**
-   - Map "Sales" -> `sales_amount` (or closest numeric column).
-   - Map "Software" -> `product_category` (or closest text column).
-   
-2. **Step 2: Case-Insensitive Filtering:**
-   - You do NOT know if the database stores 'Asia' or 'asia'.
-   - **ALWAYS** use `LOWER()`: `WHERE LOWER(region) = 'asia'`
-   - **ALWAYS** use `LOWER()`: `WHERE LOWER(product_category) = 'software'`
-
-3. **Step 3: Final Verification:**
-   - Check your generated SQL. Did you use `sales_data`? If yes, change it to `sales`.
-   - Did you use `EXTRACT()`? If yes, change it to `strftime()` or `year`.
-
-### TARGET SCHEMA
-You must return a single valid JSON object with `thought_process`, `sql_query`, `visualization_config`, and `narrative`.
-
-### FEW-SHOT EXAMPLES
-
-**Input:**
-"Show me sales for 2025."
-
-**Output:**
-{
-  "thought_process": "1. User wants 'sales' (sales_amount) for '2025'. 2. Schema has a 'year' column. 3. Dialect is SQLite, so I will use the 'year' column directly to avoid date function errors.",
-  "sql_query": "SELECT SUM(sales_amount) as sales_amount FROM sales WHERE year = 2025",
-  "visualization_config": {
-    "chart_type": "bar_chart_3d",
-    "x_axis": "year",
-    "y_axis": "sales_amount",
+### OUTPUT FORMAT (strict JSON, nothing else)
+{{
+  "thought_process": "one line reasoning",
+  "sql_query": "valid sqlite query",
+  "visualization_config": {{
+    "chart_type": "bar_chart_3d | pie_3d | scatter_3d | globe_3d",
+    "x_axis": "MUST be exact column name from SELECT (e.g. product, region)",
+    "y_axis": "MUST be exact aggregate column name from SELECT (e.g. sales, count)",
     "color_theme": "neon_blue",
     "camera_action": "zoom_in"
-  },
-  "narrative": "Total sales for the year 2025."
-}
+  }},
+  "narrative": "one line summary"
+}}
 
-**Input:**
-"Compare software revenue in Asia vs Europe."
 
-**Output:**
-{
-  "thought_process": "1. Mapping 'revenue' to 'sales_amount'. 2. Filtering 'product_category' for 'software'. 3. Filtering 'region' for Asia/Europe. 4. Using LOWER() for all text matches.",
-  "sql_query": "SELECT region, SUM(sales_amount) as sales_amount FROM sales WHERE LOWER(product_category) = 'software' AND LOWER(region) IN ('asia', 'europe') GROUP BY region",
-  "visualization_config": {
-    "chart_type": "bar_chart_3d",
-    "x_axis": "region",
-    "y_axis": "sales_amount",
-    "color_theme": "neon_blue",
-    "camera_action": "rotate_360"
-  },
-  "narrative": "Comparison of software sales between Asia and Europe."
-}
+### REQUEST
+"{query_input}"
+""".format(db_schema=db_context, query_input=query)  # 👈 direct .format()
 
-### CURRENT REQUEST
-**Input:**
-"{{ query_input }}"
+    parser = PydanticOutputParser(pydantic_object=HoloGraphResponse)
 
-**Output:**"""
-
-    prompt_template = PromptTemplate(
-        template=template_text,
-        input_variables=["query_input","db_schema"], # This name must match the {{ query_input }} above
-        template_format="jinja2"
-    )
-
-    parser=PydanticOutputParser(pydantic_object=HoloGraphResponse)
-    final_prompt = prompt_template.format(query_input=query,db_schema=db_context)
-    
-    
-    response = llm.invoke(final_prompt)
-    # json_string = response.content.replace("```json", "").replace("```", "").strip()
     try:
-        structured_data = parser.parse(response.content)
-        
-        
-        return {"reasoning_response": structured_data.model_dump()}
-        
+        response = llm.invoke(template_text)
+        json_string = response.content.replace("```json", "").replace("```", "").strip()
+        structured_data = parser.parse(json_string)
+        result_dict = structured_data.model_dump()
+        print(f"hello: {result_dict}")
+        return {"reasoning_response": result_dict}
     except Exception as e:
         print(f"Parsing Error: {e}")
         return {"reasoning_response": None}

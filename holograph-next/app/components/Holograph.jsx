@@ -1,140 +1,75 @@
-// src/components/Holograph.tsx
 "use client";
 
 import React, { useMemo } from "react";
 import BarChart3D from "./BarChart";
-import GroupedBarChart3D from "./GroupedBarChart3D";
 import ScatterChart3D from "./ScatterChart3D";
 import PieChart3D from "./PieChart";
 import Globe3D from "./Globe3D";
 import FallbackChart from "./FallbackChart";
-import FacetedGroupedBars from "./FacetedGroupedBars";
+import BubbleChart3D from "./BubbleChart3D";
+import HeatmapChart3D from "./HeatmapChart3D";
+import FunnelChart3D from "./FunnelChart3D";
 
-/* ---------------- ROLE INFERENCE ---------------- */
-function inferColumnRoles(data) {
-  if (!data || data.length === 0) return {};
+const CHART_MAP = {
+  bar_chart_3d: BarChart3D,
+  pie_3d: PieChart3D,
+  scatter_3d: ScatterChart3D,
+  globe_3d: Globe3D,
+  bubble_3d: BubbleChart3D,   // 👈
+  heatmap_3d: HeatmapChart3D, // 👈
+  funnel_3d: FunnelChart3D,   // 👈
+};
 
-  const sample = data[0];
-  const roles = {};
+function generateInsights(data) {
+  if (!data || data.length === 0) return [];
 
-  Object.keys(sample).forEach((key) => {
-    const values = data.map((d) => d[key]);
-    const unique = new Set(values).size;
+  const keys = Object.keys(data[0]);
+  const metricKey = keys.find(k => typeof data[0][k] === "number");
+  const categoryKey = keys.find(k => typeof data[0][k] === "string");
 
-    // ---------- TEMPORAL (YEAR-LIKE) ----------
-    if (
-      values.every((v) => typeof v === "number") &&
-      values.every((v) => v > 1900 && v < 2100)
-    ) {
-      roles[key] = { role: "temporal", granularity: "high" };
-      return;
-    }
+  if (!metricKey) return [];
 
-    // ---------- TEMPORAL (QUARTER-LIKE) ----------
-    if (
-      values.every((v) => typeof v === "string") &&
-      values.some((v) => /^Q[1-4]$/.test(v))
-    ) {
-      roles[key] = { role: "temporal", granularity: "medium" };
-      return;
-    }
+  const total = data.reduce((sum, d) => sum + d[metricKey], 0);
+  const avg = Math.round(total / data.length);
+  const insights = [
+    `Total ${metricKey}: ${total.toLocaleString()}`,
+    `Average ${metricKey}: ${avg.toLocaleString()}`,
+  ];
 
-    // ---------- METRIC ----------
-    if (values.every((v) => typeof v === "number")) {
-      roles[key] = { role: "metric" };
-      return;
-    }
-
-    // ---------- CATEGORICAL ----------
-    if (unique < data.length) {
-      roles[key] = {
-        role: "categorical",
-        granularity: unique <= 5 ? "high" : "medium",
-      };
-      return;
-    }
-
-    roles[key] = { role: "identifier" };
-  });
-
-  return roles;
-}
-
-
-
-
-function chooseStrategy(roles, chartType) {
-  const counts = { metric: 0, temporal: 0, categorical: 0 };
-
-  Object.values(roles).forEach((v) => {
-    if (counts[v.role] !== undefined) counts[v.role]++;
-  });
-
-  if (counts.metric !== 1) return "FALLBACK";
-
-  if (chartType === "bar_chart_3d") {
-    if (counts.temporal >= 2 || counts.categorical >= 2) {
-      return "FACET_GROUPED_BAR";
-    }
-    if (counts.temporal === 1 && counts.categorical >= 1) {
-      return "GROUPED_BAR";
-    }
-    return "BAR";
+  if (categoryKey) {
+    const top = [...data].sort((a, b) => b[metricKey] - a[metricKey])[0];
+    insights.push(`Top ${categoryKey}: ${top[categoryKey]} (${top[metricKey].toLocaleString()})`);
   }
 
-  return chartType?.toUpperCase();
+  return insights;
 }
 
-
-
 const HoloChart = ({ config, data }) => {
-  const roles = useMemo(() => inferColumnRoles(data || []), [data]);
-  const strategy = useMemo(
-    () => chooseStrategy(roles, config?.chart_type),
-    [roles, config]
-  );
+  const insights = useMemo(() => generateInsights(data), [data]);
 
-  if (!config || !data || data.length === 0) {
+  if (!data || data.length === 0 || !config?.chart_type) {
     return <FallbackChart />;
   }
 
-  switch (strategy) {
-    case "GROUPED_BAR":
-      console.log("GROUPED_BAR")
-      return <GroupedBarChart3D data={data} config={config} roles={roles} />;
+  const ChartComponent = CHART_MAP[config.chart_type];
 
-    case "BAR":
-      console.log("BAR")
-      return <BarChart3D data={data} config={config} />;
-
-    case "PIE_3D":
-      console.log("PIE_3D")
-      return <PieChart3D data={data} config={config} />;
-
-    case "SCATTER_3D":
-      console.log("SCATTER_3D")
-      return <ScatterChart3D data={data} config={config} />;
-
-    case "GLOBE_3D":
-      console.log("GLOBE_3D")
-      return <Globe3D data={data} config={config} />;
-
-case "FACET_GROUPED_BAR":
-  console.log("FACET_GROUPED_BAR")
-  return (
-    <FacetedGroupedBars
-      data={data}
-      config={config}
-      roles={roles}
-    />
-  );
-
-
-
-    default:
-      console.log("Fallback")
-      return <FallbackChart />;
+  if (!ChartComponent) {
+    console.warn("Unknown chart_type from backend:", config.chart_type);
+    return <FallbackChart />;
   }
+
+  return (
+    <div className="w-full">
+      <div className="mb-6 p-4 bg-gray-900 rounded-xl border border-cyan-500">
+        <h2 className="text-cyan-400 font-bold mb-2">AI Insights</h2>
+        <ul className="list-disc pl-5 text-gray-300">
+          {insights.map((insight, i) => <li key={i}>{insight}</li>)}
+        </ul>
+      </div>
+
+      <ChartComponent data={data} config={config} />
+    </div>
+  );
 };
 
 export default HoloChart;

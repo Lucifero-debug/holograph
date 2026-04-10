@@ -5,26 +5,40 @@ import React, { useState } from 'react';
 // Note: We import the default export from the component
 import HoloChart from './components/Holograph';
 
-// Dummy Data
-const TEST_CONFIG = {
-  type: "bar_chart_3d",
-  x_axis: "region",
-  y_axis: "sales",
-  color_theme: "neon_blue",
-  camera_action: "rotate_360"
-};
-
-const TEST_DATA= [
-  { region: "Asia", sales: 45000 },
-  { region: "Europe", sales: 32000 },
-  { region: "Americas", sales: 58000 }
-];
 
 export default function Home() {
   const [query, setQuery] = useState("");
-  const [chartData, setChartData] = useState(TEST_DATA);
-  const [config, setConfig] = useState(TEST_CONFIG);
+  const [chartData, setChartData] = useState([]);
+  const [config, setConfig] = useState({});
   const [loading, setLoading] = useState(false);
+
+  const handleFileUpload = async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  setLoading(true);
+
+  try {
+    const res = await fetch("http://127.0.0.1:8000/upload", {
+      method: "POST",
+      body: formData,
+    });
+
+    const json = await res.json();
+
+    if (!json.error) {
+      setChartData(json.data);
+      setConfig(json.config ); // fallback config
+    }
+  } catch (err) {
+    console.error(err);
+  }
+
+  setLoading(false);
+};
 
   const handleAsk = async () => {
     setLoading(true);
@@ -39,7 +53,8 @@ export default function Home() {
     }),
   });
       const json = await res.json();
-      console.log(json)
+       console.log("RAW BACKEND RESPONSE:", JSON.stringify(json.config));
+      console.log("muthi",json)
       if (!json.error) {
         setConfig(json.config);
         setChartData(json.data);
@@ -75,6 +90,20 @@ export default function Home() {
           {loading ? "SCANNING..." : "GENERATE"}
         </button>
       </div>
+
+      <div className="mb-6">
+  <input
+    type="file"
+    accept=".csv,.json"
+    onChange={handleFileUpload}
+    className="block w-full text-sm text-gray-400
+      file:mr-4 file:py-2 file:px-4
+      file:rounded-lg file:border-0
+      file:text-sm file:font-semibold
+      file:bg-cyan-600 file:text-white
+      hover:file:bg-cyan-500"
+  />
+</div>
 
       {/* 3D CHART CONTAINER */}
       <div className="w-full max-w-5xl">
